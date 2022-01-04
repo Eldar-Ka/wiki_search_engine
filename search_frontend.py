@@ -24,6 +24,13 @@ from pathlib import Path
 import itertools
 from time import time
 import hashlib
+import pyspark
+from pyspark.sql import *
+from pyspark.sql.functions import *
+from pyspark import SparkContext, SparkConf
+from pyspark.sql import SQLContext
+from pyspark.ml.feature import Tokenizer, RegexTokenizer
+from graphframes import *
 
 class MyFlaskApp(Flask):
     def run(self, host=None, port=None, debug=None, **options):
@@ -159,7 +166,9 @@ def get_pagerank():
     if len(wiki_ids) == 0:
       return jsonify(res)
     # BEGIN SOLUTION
-    lst=pg_table()
+    df = pg_table()
+    for doc in wiki_ids:
+        res.insert(df.loc[df["id"] == doc]["pagerank"].values[0])
     # END SOLUTION
     return jsonify(res)
 
@@ -190,7 +199,9 @@ def get_pageview():
     # END SOLUTION
     return jsonify(res)
 def pg_table():
-    pages_links = spark.read.parquet(path).limit(1000).select("id", "anchor_text").rdd
+    # return pandas table of all the docs
+    spark = SparkSession.builder.getOrCreate()
+    pages_links = spark.read.parquet("wikidumps/*").limit(1000).select("id", "anchor_text").rdd
     def help(id, anchor):
         dic = {}
         for elem in anchor:
@@ -234,8 +245,7 @@ def pg_table():
     pr = pr_results.vertices.select("id", "pagerank")
     pr = pr.sort(col('pagerank').desc())
     pr.repartition(1).write.csv('pr', compression="gzip")
-    pr.show()
-    return pr
+    return pr.toPandas()
 
 if __name__ == '__main__':
     # run the Flask RESTful API, make the server publicly available (host='0.0.0.0') on port 8080
