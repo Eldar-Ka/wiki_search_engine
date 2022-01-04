@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import numpy as np
 import pandas as pd
-#%load_ext google.colab.data_table
+# %load_ext google.colab.data_table
 import bz2
 from functools import partial
 from collections import Counter, OrderedDict
@@ -19,11 +19,13 @@ import nltk
 from nltk.stem.porter import *
 from nltk.corpus import stopwords
 import matplotlib.pyplot as plt
-#%matplotlib inline
+# %matplotlib inline
 from pathlib import Path
 import itertools
 from time import time
 import hashlib
+from inverted_index_colab import *
+
 import pyspark
 from pyspark.sql import *
 from pyspark.sql.functions import *
@@ -34,7 +36,10 @@ from graphframes import *
 
 class MyFlaskApp(Flask):
     def run(self, host=None, port=None, debug=None, **options):
+        self._my_index = InvertedIndex()
+        self._my_index.read_index("postings", "index")  # TODO check that work
         super(MyFlaskApp, self).run(host=host, port=port, debug=debug, **options)
+
 
 app = MyFlaskApp(__name__)
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
@@ -61,11 +66,12 @@ def search():
     res = []
     query = request.args.get('query', '')
     if len(query) == 0:
-      return jsonify(res)
+        return jsonify(res)
     # BEGIN SOLUTION
 
     # END SOLUTION
     return jsonify(res)
+
 
 @app.route("/search_body")
 def search_body():
@@ -86,11 +92,12 @@ def search_body():
     res = []
     query = request.args.get('query', '')
     if len(query) == 0:
-      return jsonify(res)
+        return jsonify(res)
     # BEGIN SOLUTION
 
     # END SOLUTION
     return jsonify(res)
+
 
 @app.route("/search_title")
 def search_title():
@@ -112,11 +119,12 @@ def search_title():
     res = []
     query = request.args.get('query', '')
     if len(query) == 0:
-      return jsonify(res)
+        return jsonify(res)
     # BEGIN SOLUTION
 
     # END SOLUTION
     return jsonify(res)
+
 
 @app.route("/search_anchor")
 def search_anchor():
@@ -139,11 +147,12 @@ def search_anchor():
     res = []
     query = request.args.get('query', '')
     if len(query) == 0:
-      return jsonify(res)
+        return jsonify(res)
     # BEGIN SOLUTION
-    
+
     # END SOLUTION
     return jsonify(res)
+
 
 @app.route("/get_pagerank", methods=['POST'])
 def get_pagerank():
@@ -164,13 +173,14 @@ def get_pagerank():
     res = []
     wiki_ids = request.get_json()
     if len(wiki_ids) == 0:
-      return jsonify(res)
+        return jsonify(res)
     # BEGIN SOLUTION
     df = pg_table()
     for doc in wiki_ids:
         res.insert(df.loc[df["id"] == doc]["pagerank"].values[0])
     # END SOLUTION
     return jsonify(res)
+
 
 @app.route("/get_pageview", methods=['POST'])
 def get_pageview():
@@ -193,11 +203,13 @@ def get_pageview():
     res = []
     wiki_ids = request.get_json()
     if len(wiki_ids) == 0:
-      return jsonify(res)
+        return jsonify(res)
     # BEGIN SOLUTION
 
     # END SOLUTION
     return jsonify(res)
+
+
 def pg_table():
     # return pandas table of all the docs
     spark = SparkSession.builder.getOrCreate()
@@ -246,6 +258,113 @@ def pg_table():
     pr = pr.sort(col('pagerank').desc())
     pr.repartition(1).write.csv('pr', compression="gzip")
     return pr.toPandas()
+
+
+def build_inverted_index():
+    english_stopwords = frozenset(stopwords.words('english'))
+    corpus_stopwords = []
+
+    all_stopwords = english_stopwords.union(corpus_stopwords)
+    RE_WORD = re.compile(r"""[\#\@\w](['\-]?\w){2,24}""", re.UNICODE)
+
+    NUM_BUCKETS = 124
+
+    def _hash(s):
+        return hashlib.blake2b(bytes(s, encoding='utf8'), digest_size=5).hexdigest()
+
+    def token2bucket_id(token):
+        return int(_hash(token), 16) % NUM_BUCKETS
+
+    def word_count(text, id):
+        """ Count the frequency of each word in `text` (tf) that is not included in
+        `all_stopwords` and return entries that will go into our posting lists.
+        Parameters:
+        -----------
+          text: str
+            Text of one document
+          id: int
+            Document id
+        Returns:
+        --------
+          List of tuples
+            A list of (token, (doc_id, tf)) pairs
+            for example: [("Anarchism", (12, 5)), ...]
+        """
+        tokens = [token.group() for token in RE_WORD.finditer(text.lower())]
+
+        lst_c = Counter([token for token in tokens if token not in all_stopwords])
+        lst_c = list(lst_c.items())
+        lst = []
+
+        for token in lst_c:
+            lst.append((token[0], (id, token[1])))
+
+        return lst
+
+    def reduce_word_counts(unsorted_pl):
+        """ Returns a sorted posting list by wiki_id.
+        Parameters:
+        -----------
+          unsorted_pl: list of tuples
+            A list of (wiki_id, tf) tuples
+        Returns:
+        --------
+          list of tuples
+            A sorted posting list.
+        """
+        return sorted(unsorted_pl)
+
+    def calculate_df(postings):
+        """ Takes a posting list RDD and calculate the df for each token.
+        Parameters:
+        -----------
+          postings: RDD
+            An RDD where each element is a (token, posting_list) pair.
+        Returns:
+        --------
+          RDD
+            An RDD where each element is a (token, df) pair.
+        """
+        return postings.map(lambda tup: (tup[0], len(tup[1])))
+
+    def partition_postings_and_write(postings):
+        """ A function that partitions the posting lists into buckets, writes out
+        all posting lists in a bucket to disk, and returns the posting locations for
+        each bucket. Partitioning should be done through the use of `token2bucket`
+        above. Writing to disk should use the function  `write_a_posting_list`, a
+        static method implemented in inverted_index_colab.py under the InvertedIndex
+        class.
+        Parameters:
+        -----------
+          postings: RDD
+            An RDD where each item is a (w, posting_list) pair.
+        Returns:
+        --------
+          RDD
+            An RDD where each item is a posting locations dictionary for a bucket. The
+            posting locations maintain a list for each word of file locations and
+            offsets its posting list was written to. See `write_a_posting_list` for
+            more details.
+        """
+        rdd = postings.map(lambda tup: (token2bucket_id(tup[0]), [tup]))
+        rdd = rdd.reduceByKey(lambda a, b: a + b)
+        rdd = rdd.map(lambda tup: InvertedIndex.write_a_posting_list(tup))
+
+        return rdd
+
+    # word counts map
+    full_path = "gs://wikidata_preprocessed/*"
+    parquetFile = spark.read.parquet(full_path)
+    doc_text_pairs = parquetFile.select("text", "id").rdd
+    word_counts = doc_text_pairs.flatMap(lambda x: word_count(x[0], x[1]))
+    postings = word_counts.groupByKey().mapValues(reduce_word_counts)
+    # filtering postings and calculate df
+    postings_filtered = postings.filter(lambda x: len(x[1]) > 50)
+    w2df = calculate_df(postings_filtered)
+    w2df_dict = w2df.collectAsMap()
+    # partition posting lists and write out
+    _ = partition_postings_and_write(postings_filtered).collect()
+
 
 if __name__ == '__main__':
     # run the Flask RESTful API, make the server publicly available (host='0.0.0.0') on port 8080
