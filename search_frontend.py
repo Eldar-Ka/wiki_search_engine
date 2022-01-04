@@ -36,8 +36,11 @@ from graphframes import *
 
 class MyFlaskApp(Flask):
     def run(self, host=None, port=None, debug=None, **options):
-        self._my_index = InvertedIndex()
-        self._my_index.read_index("postings", "index")  # TODO check that work
+        with open("postings/index.pkl", 'rb') as f:
+            self.index = pickle.loads(f.read())
+        with open("pageview/pageviews-202108-user.pkl", 'rb') as f:
+            self.pageview = dict(pickle.loads(f.read()))
+        self.df = pg_table()
         super(MyFlaskApp, self).run(host=host, port=port, debug=debug, **options)
 
 
@@ -175,9 +178,8 @@ def get_pagerank():
     if len(wiki_ids) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-    df = pg_table()
     for doc in wiki_ids:
-        res.insert(df.loc[df["id"] == doc]["pagerank"].values[0])
+        res.insert(self.df.loc[self.df["id"] == doc]["pagerank"].values[0])
     # END SOLUTION
     return jsonify(res)
 
@@ -205,7 +207,7 @@ def get_pageview():
     if len(wiki_ids) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-
+    res = [self.pageview[i] for i in wiki_ids]
     # END SOLUTION
     return jsonify(res)
 
@@ -261,6 +263,7 @@ def pg_table():
 
 
 def build_inverted_index():
+    spark = SparkSession.builder.getOrCreate()
     english_stopwords = frozenset(stopwords.words('english'))
     corpus_stopwords = []
 
