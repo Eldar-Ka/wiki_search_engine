@@ -173,6 +173,7 @@ def get_pagerank():
         list of floats:
           list of PageRank scores that correrspond to the provided article IDs.
     '''
+    # return the selected pageRank
     res = []
     wiki_ids = request.get_json()
     if len(wiki_ids) == 0:
