@@ -202,6 +202,7 @@ def get_pageview():
           list of page view numbers from August 2021 that correrspond to the
           provided list article IDs.
     '''
+    #return the selected pageView
     res = []
     wiki_ids = request.get_json()
     if len(wiki_ids) == 0:
