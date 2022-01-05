@@ -179,7 +179,7 @@ def get_pagerank():
         return jsonify(res)
     # BEGIN SOLUTION
     for doc in wiki_ids:
-        res.insert(self.df.loc[self.df["id"] == doc]["pagerank"].values[0])
+        res.insert(app.df.loc[app.df["id"] == doc]["pagerank"].values[0])
     # END SOLUTION
     return jsonify(res)
 
@@ -207,7 +207,7 @@ def get_pageview():
     if len(wiki_ids) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-    res = [self.pageview[i] for i in wiki_ids]
+    res = [app.pageview[i] for i in wiki_ids]
     # END SOLUTION
     return jsonify(res)
 
@@ -215,7 +215,7 @@ def get_pageview():
 def pg_table():
     # return pandas table of all the docs
     spark = SparkSession.builder.getOrCreate()
-    pages_links = spark.read.parquet("wikidumps/*").limit(1000).select("id", "anchor_text").rdd
+    pages_links = spark.read.parquet("wikidumps/multistream1_preprocessed.parquet").limit(1000).select("id", "anchor_text").rdd
     def help(id, anchor):
         dic = {}
         for elem in anchor:
@@ -251,7 +251,6 @@ def pg_table():
     # construct the graph for a small sample of (1000) pages
     edges, vertices = generate_graph(pages_links)
     # time the actual execution
-    v_cnt, e_cnt = vertices.count(), edges.count()
     edgesDF = edges.toDF(['src', 'dst']).repartition(4, 'src')
     verticesDF = vertices.toDF(['id']).repartition(4, 'id')
     g = GraphFrame(verticesDF, edgesDF)
