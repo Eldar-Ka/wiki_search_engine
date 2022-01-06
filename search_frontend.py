@@ -48,8 +48,11 @@ class MyFlaskApp(Flask):
         with open("pageview/pageviews-202108-user.pkl", 'rb') as f:
             self.pageview = dict(pickle.loads(f.read()))
         self.df = pd.read_csv('wikidumps/pr.csv')
+        self.titles = pd.read_csv('wikidumps/titles.csv')
         super(MyFlaskApp, self).run(host=host, port=port, debug=debug, **options)
 
+
+nltk.download('stopwords', quiet=True)
 
 app = MyFlaskApp(__name__)
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
@@ -104,7 +107,7 @@ def search_body():
     if len(query) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-
+    res = search_by_index(query, app.index_body)
     # END SOLUTION
     return jsonify(res)
 
@@ -131,7 +134,7 @@ def search_title():
     if len(query) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-
+    res = search_by_index(query, app.index_title)
     # END SOLUTION
     return jsonify(res)
 
@@ -159,7 +162,7 @@ def search_anchor():
     if len(query) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-
+    res = search_by_index(query, app.index_anchor)
     # END SOLUTION
     return jsonify(res)
 
@@ -228,7 +231,8 @@ def get_pageview():
 def pg_table():
     # return pandas table of all the docs
     spark = SparkSession.builder.getOrCreate()
-    pages_links = spark.read.parquet("wikidumps/multistream1_preprocessed.parquet").limit(1000).select("id", "anchor_text").rdd
+    pages_links = spark.read.parquet("wikidumps/multistream1_preprocessed.parquet").limit(1000).select("id",
+                                                                                                       "anchor_text").rdd
 
     def help(id, anchor):
         dic = {}
@@ -275,7 +279,7 @@ def pg_table():
     return pr.toPandas()
 
 
-def search_by_index(querie_to_search, index, N=-1):
+def search_by_index(query_to_search, index, N=-1):
     RE_WORD = re.compile(r"""[\#\@\w](['\-]?\w){2,24}""", re.UNICODE)
     stopwords_frozen = frozenset(stopwords.words('english'))
 
@@ -361,8 +365,9 @@ def search_by_index(querie_to_search, index, N=-1):
         for term in np.unique(query_to_search):
             if term in words:
                 list_of_doc = pls[words.index(term)]
-                normlized_tfidf = [(doc_id, (freq / index.DL[str(doc_id)]) * math.log(N / index.df[term], 10)) for
-                                   doc_id, freq in list_of_doc]
+                normlized_tfidf = [(doc_id, (freq / index.DL[str(doc_id)]) * math.log(N / index.df[term], 10))
+                                   for
+                                   doc_id, freq in list_of_doc if index.DL.get(str(doc_id), 0)] # TODO NOT WORK if index.DL.get(str(doc_id), 0)
 
                 for doc_id, tfidf in normlized_tfidf:
                     candidates[(doc_id, term)] = candidates.get((doc_id, term), 0) + tfidf
@@ -406,34 +411,33 @@ def search_by_index(querie_to_search, index, N=-1):
 
         return D
 
-    def get_topN_score_for_queries(querie_to_search, index, N=-1):
+    def get_topN_score_for_query(query_to_search, index, N=-1):
         """
         Generate a dictionary that gathers for every query its topN score.
 
         Parameters:
         -----------
-        queries_to_search: a dictionary of queries as follows:
-                                                            key: query_id
-                                                            value: list of tokens.
+        query_to_search: query
         index:           inverted index loaded from the corresponding files.
         N: Integer. How many documents to retrieve. This argument is passed to the topN function. By default N = 3, for the topN function.
 
         Returns:
         -----------
-        return: a dictionary of queries and topN pairs as follows:
+        return: a list of  topN pairs as follows:
                                                             key: query_id
-                                                            value: list of pairs in the following format:(doc_id, score).
+                                                            value: title
         """
         # YOUR CODE HERE
         words, pls = tuple(zip(*list(map(lambda tup: tup, index.posting_lists_iter()))))
-        val = tokenize(querie_to_search)
+        val = tokenize(query_to_search)
         D = generate_document_tfidf_matrix(val, index, words, pls)
         Q = generate_query_tfidf_vector(val, index)
-        result = sorted([(doc_id, round(score, 5)) for doc_id, score in cosine_similarity(D, Q).items()], key=lambda x: x[1],
-               reverse=True)
+        result = sorted([(doc_id, round(score, 5)) for doc_id, score in cosine_similarity(D, Q).items()],
+                        key=lambda x: x[1],
+                        reverse=True)
         if N != -1:
             result = result[:N]
-
+        result = [(id, app.df.loc[app.df["id"] == id]["pagerank"].values) for id, score in result]
         return result
 
     def cosine_similarity(D, Q):
@@ -462,7 +466,8 @@ def search_by_index(querie_to_search, index, N=-1):
             dic[j] = cos_sim
         return dic
 
-    return get_topN_score_for_queries(querie_to_search, index, N)
+    return get_topN_score_for_query(query_to_search, index, N)
+
 
 def build_inverted_index():
     spark = SparkSession.builder.getOrCreate()
