@@ -107,7 +107,7 @@ def search_body():
     if len(query) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-    res = search_by_index(query, app.index_body)
+    res = search_by_body_index(query)
     # END SOLUTION
     return jsonify(res)
 
@@ -134,7 +134,7 @@ def search_title():
     if len(query) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-    res = search_by_index(query, app.index_title)
+    res = binary_search_by_index(query, app.index_title)
     # END SOLUTION
     return jsonify(res)
 
@@ -162,7 +162,7 @@ def search_anchor():
     if len(query) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-    res = search_by_index(query, app.index_anchor)
+    res = binary_search_by_index(query, app.index_anchor)
     # END SOLUTION
     return jsonify(res)
 
@@ -278,65 +278,59 @@ def pg_table():
     pr.repartition(1).write.csv('pr', compression="gzip")
     return pr.toPandas()
 
+RE_WORD = re.compile(r"""[\#\@\w](['\-]?\w){2,24}""", re.UNICODE)
+stopwords_frozen = frozenset(stopwords.words('english'))
 
-def search_by_index(query_to_search, index, N=-1):
-    RE_WORD = re.compile(r"""[\#\@\w](['\-]?\w){2,24}""", re.UNICODE)
-    stopwords_frozen = frozenset(stopwords.words('english'))
 
-    def tokenize(text):
-        """
-        This function aims in tokenize a text into a list of tokens. Moreover, it filter stopwords.
+def tokenize(text):
+    """
+    This function aims in tokenize a text into a list of tokens. Moreover, it filter stopwords.
 
-        Parameters:
-        -----------
-        text: string , represting the text to tokenize.
+    Parameters:
+    -----------
+    text: string , represting the text to tokenize.
 
-        Returns:
-        -----------
-        list of tokens (e.g., list of tokens).
-        """
-        list_of_tokens = [token.group() for token in RE_WORD.finditer(text.lower()) if
-                          token.group() not in stopwords_frozen]
-        return list_of_tokens
+    Returns:
+    -----------
+    list of tokens (e.g., list of tokens).
+    """
+    list_of_tokens = [token.group() for token in RE_WORD.finditer(text.lower()) if
+                      token.group() not in stopwords_frozen]
+    return list_of_tokens
 
-    def generate_query_tfidf_vector(query_to_search, index):
-        """
-        Generate a vector representing the query. Each entry within this vector represents a tfidf score.
-        The terms representing the query will be the unique terms in the index.
 
-        We will use tfidf on the query as well.
-        For calculation of IDF, use log with base 10.
-        tf will be normalized based on the length of the query.
+def binary_search_by_index(query, index, N=-1):
 
-        Parameters:
-        -----------
-        query_to_search: list of tokens (str). This list will be preprocessed in advance (e.g., lower case, filtering stopwords, etc.').
-                         Example: 'Hello, I love information retrival' --->  ['hello','love','information','retrieval']
+    words, pls = tuple(zip(*list(map(lambda tup: tup, index.posting_lists_iter()))))
+    query_to_search = tokenize(query)
 
-        index:           inverted index loaded from the corresponding files.
+    candidates = {}
 
-        Returns:
-        -----------
-        vectorized query with tfidf scores
-        """
+    N = len(app.titles.index)
+    for term in np.unique(query_to_search):
+        if term in words:
+            list_of_doc = pls[words.index(term)]
+            couter = [(doc_id, freq)
+                               for
+                               doc_id, freq in list_of_doc]
 
-        epsilon = .0000001
-        total_vocab_size = len(index.term_total)
-        Q = np.zeros((total_vocab_size))
-        term_vector = list(index.term_total.keys())
-        counter = Counter(query_to_search)
-        for token in np.unique(query_to_search):
-            if token in index.term_total.keys():  # avoid terms that do not appear in the index.
-                tf = counter[token] / len(query_to_search)  # term frequency divded by the length of the query
-                df = index.df[token]
-                idf = math.log(len(index.DL) / (df + epsilon), 10)  # smoothing
+            for doc_id, freq in couter:
+                candidates[(doc_id, term)] = candidates.get((doc_id, term), 0) + freq
 
-                try:
-                    ind = term_vector.index(token)
-                    Q[ind] = tf * idf
-                except:
-                    pass
-        return Q
+    result = sorted([(doc_id[0], freq) for doc_id, freq in candidates.items()],
+                    key=lambda x: x[1],
+                    reverse=True)
+    if N != -1:
+        result = result[:N]
+
+    print("result")
+    print(result)
+    result = [(id, app.titles.loc[app.titles["id"] == id]["title"].values[0]) for id, freq in result]
+
+    return result
+
+
+def search_by_body_index(query_to_search, N=-1):
 
     def get_candidate_documents_and_scores(query_to_search, index, words, pls):
         """
@@ -361,18 +355,59 @@ def search_by_index(query_to_search, index, N=-1):
                                                                    value: tfidf score.
         """
         candidates = {}
-        N = len(index.DL)
+        N = len(app.titles.index)
         for term in np.unique(query_to_search):
             if term in words:
                 list_of_doc = pls[words.index(term)]
-                normlized_tfidf = [(doc_id, (freq / index.DL[str(doc_id)]) * math.log(N / index.df[term], 10))
+                normlized_tfidf = [(doc_id,
+                                    (freq / app.titles.loc[app.titles["id"] == doc_id]["text"].values[0]) * math.log(
+                                        N / index.df[term], 10))
                                    for
-                                   doc_id, freq in list_of_doc if index.DL.get(str(doc_id), 0)] # TODO NOT WORK if index.DL.get(str(doc_id), 0)
+                                   doc_id, freq in list_of_doc]
 
                 for doc_id, tfidf in normlized_tfidf:
                     candidates[(doc_id, term)] = candidates.get((doc_id, term), 0) + tfidf
 
         return candidates
+
+    def generate_query_tfidf_vector(query_to_search, index):
+        """
+        Generate a vector representing the query. Each entry within this vector represents a tfidf score.
+        The terms representing the query will be the unique terms in the index.
+
+        We will use tfidf on the query as well.
+        For calculation of IDF, use log with base 10.
+        tf will be normalized based on the length of the query.
+
+        Parameters:
+        -----------
+        query_to_search: list of tokens (str). This list will be preprocessed in advance (e.g., lower case, filtering stopwords, etc.').
+                         Example: 'Hello, I love information retrival' --->  ['hello','love','information','retrieval']
+
+        index:           inverted index loaded from the corresponding files.
+
+        Returns:
+        -----------
+        vectorized query with tfidf scores
+        """
+
+        epsilon = .0000001
+        total_vocab_size = len(index.df)
+        Q = np.zeros((total_vocab_size))
+        term_vector = list(index.df.keys())
+        counter = Counter(query_to_search)
+        for token in np.unique(query_to_search):
+            if token in index.df.keys():  # avoid terms that do not appear in the index.
+                tf = counter[token] / len(query_to_search)  # term frequency divded by the length of the query
+                df = index.df[token]
+                idf = math.log(len(app.titles.index) / (df + epsilon), 10)  # smoothing
+
+                try:
+                    ind = term_vector.index(token)
+                    Q[ind] = tf * idf
+                except:
+                    pass
+        return Q  # TODO check return 1.0
 
     def generate_document_tfidf_matrix(query_to_search, index, words, pls):
         """
@@ -394,7 +429,7 @@ def search_by_index(query_to_search, index, N=-1):
         DataFrame of tfidf scores.
         """
 
-        total_vocab_size = len(index.term_total)
+        total_vocab_size = len(index.df)
         candidates_scores = get_candidate_documents_and_scores(query_to_search, index, words,
                                                                pls)  # We do not need to utilize all document. Only the docuemnts which have corrspoinding terms with the query.
         unique_candidates = np.unique([doc_id for doc_id, freq in candidates_scores.keys()])
@@ -402,12 +437,12 @@ def search_by_index(query_to_search, index, N=-1):
         D = pd.DataFrame(D)
 
         D.index = unique_candidates
-        D.columns = index.term_total.keys()
+        D.columns = index.df.keys()
 
         for key in candidates_scores:
             tfidf = candidates_scores[key]
             doc_id, term = key
-            D.loc[doc_id][term] = tfidf
+            D.loc[doc_id][term] = tfidf  # TODO check work ?
 
         return D
 
@@ -430,14 +465,18 @@ def search_by_index(query_to_search, index, N=-1):
         # YOUR CODE HERE
         words, pls = tuple(zip(*list(map(lambda tup: tup, index.posting_lists_iter()))))
         val = tokenize(query_to_search)
+
         D = generate_document_tfidf_matrix(val, index, words, pls)
         Q = generate_query_tfidf_vector(val, index)
-        result = sorted([(doc_id, round(score, 5)) for doc_id, score in cosine_similarity(D, Q).items()],
+
+        result = sorted([(doc_id, score) for doc_id, score in cosine_similarity(D, Q).items()],
                         key=lambda x: x[1],
                         reverse=True)
         if N != -1:
             result = result[:N]
-        result = [(id, app.df.loc[app.df["id"] == id]["pagerank"].values) for id, score in result]
+        #print("result")
+        #print(result)
+        result = [(id, app.titles.loc[app.titles["id"] == id]["title"].values[0]) for id, score in result]
         return result
 
     def cosine_similarity(D, Q):
@@ -459,14 +498,18 @@ def search_by_index(query_to_search, index, N=-1):
                                                                     key: document id (e.g., doc_id)
                                                                     value: cosine similarty score.
         """
+        # YOUR CODE HERE
         dic = {}
-        arr = D.to_numpy()
-        for j in range(len(arr)):
-            cos_sim = np.dot(arr[j], Q) / (np.linalg.norm(arr[j]) * np.linalg.norm(Q))
-            dic[j] = cos_sim
+        index = list(D.index)
+        tfidf = D.to_numpy()
+        i = 0
+        for lst in tfidf:
+            dic[index[i]] = np.dot(lst, Q) / (np.linalg.norm(lst) * np.linalg.norm(Q))  # TODO check return 1.0
+            i += 1
+
         return dic
 
-    return get_topN_score_for_query(query_to_search, index, N)
+    return get_topN_score_for_query(query_to_search, app.index_body, N)
 
 
 def build_inverted_index():
