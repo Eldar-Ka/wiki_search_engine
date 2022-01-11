@@ -82,6 +82,21 @@ def search():
         return jsonify(res)
     # BEGIN SOLUTION
 
+    body = search_by_body_index(query, 100)
+    anchor = binary_search_by_index(query, app.index_anchor, 100)
+
+    pagerank = {}
+    for doc in (body + anchor):
+        if doc[0] in pagerank:
+            continue
+        val = app.df.loc[app.df["id"] == doc[0]]["pagerank"].values
+        if len(val) == 0:
+            pagerank[doc[0]] = (doc[0], doc[1], 0)
+        else:
+            pagerank[doc[0]] = (doc[0], doc[1], val[0])
+
+    res = list(sorted(pagerank.items(), key=lambda item: item[1][2], reverse=True))[:100]
+    res = [(item[1][0], item[1][1]) for item in res]
     # END SOLUTION
     return jsonify(res)
 
@@ -107,7 +122,7 @@ def search_body():
     if len(query) == 0:
         return jsonify(res)
     # BEGIN SOLUTION
-    res = search_by_body_index(query)
+    res = search_by_body_index(query, 100)
     # END SOLUTION
     return jsonify(res)
 
@@ -323,8 +338,8 @@ def binary_search_by_index(query, index, N=-1):
     if N != -1:
         result = result[:N]
 
-    print("result")
-    print(result)
+    #print("result")
+    #print(result)
     result = [(id, app.titles.loc[app.titles["id"] == id]["title"].values[0]) for id, freq in result]
 
     return result
