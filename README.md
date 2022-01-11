@@ -2,10 +2,14 @@
 
   ## code structure:
 
-inverted_index_colab.py - indexer of documents which creates postings list for the search engine
-
 search_frontend.py - initiallization of the search engine localy
+
+inverted_index_colab.py - indexer of documents which creates postings list for the search engine localy
+
 search_frontend_vm.py - initiallization of the search engine on the VM machine over GCP
+
+inverted_index_gcp.py - indexer of documents which creates postings list for the search engine over GCP
+
 
   ## functionality:
 
